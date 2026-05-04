@@ -1,4 +1,4 @@
-    # Topology Description (ECML 2026: Real-World Baselines Challenge)
+# Topology Description (ECML 2026: Real-World Baselines Challenge)
 
 The competition runs on a single topology (120 x 150) with 28 stations:
 
