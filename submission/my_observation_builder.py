@@ -49,7 +49,7 @@ class DispatcherObservationBuilder(ObservationBuilder):
         agent = self.env.agents[handle]
         mask = obs[5:10]
         mask[0] = 1.0  # DO_NOTHING always valid
-        if agent.state in (TrainState.DONE, TrainState.DONE_REMOVED, TrainState.WAITING):
+        if agent.state in (TrainState.DONE, TrainState.WAITING):
             pass
         elif agent.position is None:
             mask[2] = 1.0  # READY_TO_DEPART -> MOVE_FORWARD enters the grid

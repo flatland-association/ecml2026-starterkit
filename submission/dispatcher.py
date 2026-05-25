@@ -48,8 +48,9 @@ class HeuristicDispatcher:
     # corridors on the competition map.
     RESERVE_HORIZON = 12
 
-    # How far to forecast head-on collisions on the immediate branch.
-    HEADON_LOOKAHEAD = 6
+    # Hard cap on corridor scan length (cells). Single-track corridors on
+    # the competition map can be quite long; we still cap to bound cost.
+    CORRIDOR_SCAN_MAX = 200
 
     def __init__(self):
         self.env = None
@@ -171,9 +172,13 @@ class HeuristicDispatcher:
     # ------------------------------------------------------------------
 
     def _virtual_pos_dir(self, agent):
-        """Return (pos, direction) treating READY_TO_DEPART/WAITING as if
-        already at the initial cell. (None, None) for terminal states."""
-        if agent.state in (TrainState.READY_TO_DEPART, TrainState.WAITING):
+        """Return (pos, direction) treating off-map states as if at the
+        initial cell. (None, None) once DONE."""
+        if agent.state in (
+            TrainState.READY_TO_DEPART,
+            TrainState.WAITING,
+            TrainState.MALFUNCTION_OFF_MAP,
+        ):
             return agent.initial_position, agent.initial_direction
         if agent.state in (
             TrainState.MOVING,
@@ -250,6 +255,9 @@ class HeuristicDispatcher:
         return best_dir, act
 
     def _project_path(self, handle: int, max_steps: int):
+        """Returns list of (cell, t, direction) the agent is expected to
+        occupy. Direction is the heading into that cell (-1 for the
+        starting cell while stationary)."""
         agent = self.env.agents[handle]
         pos, direction = self._virtual_pos_dir(agent)
         if pos is None:
@@ -259,13 +267,12 @@ class HeuristicDispatcher:
         target = self._next_target(handle)
         cells = []
         t = int(self.env._elapsed_steps)
-        # Malfunction freezes the agent in place.
         mf = self._malfunction_steps(agent)
         for _ in range(min(mf, max_steps)):
-            cells.append((pos, t))
+            cells.append((pos, t, direction))
             t += 1
         while len(cells) < max_steps:
-            cells.append((pos, t))
+            cells.append((pos, t, direction))
             t += 1
             nxt_dir, _ = self._best_direction(pos, direction, target)
             if nxt_dir is None:
@@ -293,7 +300,7 @@ class HeuristicDispatcher:
 
     def _priority_score(self, handle: int) -> float:
         agent = self.env.agents[handle]
-        if agent.state in (TrainState.DONE, TrainState.DONE_REMOVED):
+        if agent.state in (TrainState.DONE,):
             return float("inf")
         pos, direction = self._virtual_pos_dir(agent)
         if pos is None:
@@ -317,7 +324,7 @@ class HeuristicDispatcher:
         active: List[int] = []
         for h in self.env.get_agent_handles():
             agent = self.env.agents[h]
-            if agent.state in (TrainState.DONE, TrainState.DONE_REMOVED):
+            if agent.state in (TrainState.DONE,):
                 continue
             active.append(h)
 
@@ -326,10 +333,35 @@ class HeuristicDispatcher:
         for rank, h in enumerate(order):
             self._rank[h] = rank
 
-        # Reserve projected paths in priority order; first claimant wins.
+        # Reserve projected paths in priority order. A path is corridor-
+        # blocked iff one of its projected cells is reserved by a
+        # higher-priority agent with an OPPOSING direction at the same
+        # or an adjacent time step (the head-on conflict signature).
+        # Same-direction overlaps (followers) are not conflicts.
+        self._blocked_corridor: set = set()
+        # _reservations: (cell, t) -> (handle, direction)
+        self._reservations = {}
         for h in order:
-            for cell, t in self._project_path(h, self.RESERVE_HORIZON):
-                self._reservations.setdefault((cell, t), h)
+            cells = self._project_path(h, self.RESERVE_HORIZON)
+            conflict = False
+            for cell, t, d in cells[1:]:
+                for dt in (-1, 0, 1):
+                    prior = self._reservations.get((cell, t + dt))
+                    if prior is None:
+                        continue
+                    p_h, p_d = prior
+                    if p_h == h:
+                        continue
+                    if p_d == (d + 2) % 4:  # head-on
+                        conflict = True
+                        break
+                if conflict:
+                    break
+            if conflict:
+                self._blocked_corridor.add(h)
+            else:
+                for cell, t, d in cells:
+                    self._reservations.setdefault((cell, t), (h, d))
 
         self._plan = {}
         for h in self.env.get_agent_handles():
@@ -346,36 +378,57 @@ class HeuristicDispatcher:
             return False
         return ro < rm
 
-    def _branch_blocked_by_headon(self, handle, pos, direction):
-        """Walk forward up to HEADON_LOOKAHEAD cells from (pos, direction).
-        Return True if we hit a head-on opponent or a stalled agent before
-        reaching a switch."""
+    def _corridor_opposing(self, handle, pos, direction):
+        """Walk the single-track corridor from (pos, direction) until a
+        switch. Return the handle of the FIRST agent we find inside the
+        corridor whose direction is opposite to ours - i.e. would
+        deadlock if we entered. Same-direction agents and stalled agents
+        are not returned (different check)."""
         rail = self.env.rail
         cur_pos, cur_dir = pos, direction
-        for _ in range(self.HEADON_LOOKAHEAD):
+        for _ in range(self.CORRIDOR_SCAN_MAX):
             occ = self.env.agent_positions[cur_pos]
             if occ != -1 and occ != handle:
                 other = self.env.agents[occ]
-                if other.direction == (cur_dir + 2) % 4:
-                    return True
-                if other.state in (TrainState.STOPPED, TrainState.MALFUNCTION):
-                    return True
+                if other.direction is not None and int(other.direction) == (cur_dir + 2) % 4:
+                    return occ
+                # Same-direction agent: not a head-on, but treated as a
+                # blocker by the near-cell check below.
             if cur_pos in self._switches:
-                return False
+                return None
             t = rail.get_transitions((cur_pos, cur_dir))
             count = fast_count_nonzero(t)
             if count != 1:
-                return False
+                return None
             nd = int(np.argmax(t))
             cur_pos = get_new_position(cur_pos, nd)
             cur_dir = nd
-        return False
+        return None
+
+    def _immediate_blocker(self, handle, pos, direction, depth=6):
+        """Return the handle of the nearest agent in our path, scanning
+        forward up to `depth` cells through a corridor. Any direction."""
+        rail = self.env.rail
+        cur_pos, cur_dir = pos, direction
+        for _ in range(depth):
+            occ = self.env.agent_positions[cur_pos]
+            if occ != -1 and occ != handle:
+                return occ
+            if cur_pos in self._switches:
+                return None
+            t = rail.get_transitions((cur_pos, cur_dir))
+            if fast_count_nonzero(t) != 1:
+                return None
+            nd = int(np.argmax(t))
+            cur_pos = get_new_position(cur_pos, nd)
+            cur_dir = nd
+        return None
 
     def _decide_action(self, handle: int) -> int:
         agent = self.env.agents[handle]
         st = agent.state
 
-        if st in (TrainState.DONE, TrainState.DONE_REMOVED):
+        if st in (TrainState.DONE,):
             return DO_NOTHING
         if st == TrainState.WAITING:
             return DO_NOTHING
@@ -388,9 +441,11 @@ class HeuristicDispatcher:
             occ = self.env.agent_positions[init_pos]
             if occ != -1 and occ != handle:
                 return DO_NOTHING
-            holder = self._reservations.get((init_pos, t_now))
-            if holder is not None and holder != handle and self._has_higher_priority(holder, handle):
-                return DO_NOTHING
+            entry = self._reservations.get((init_pos, t_now))
+            if entry is not None:
+                holder, _ = entry
+                if holder != handle and self._has_higher_priority(holder, handle):
+                    return DO_NOTHING
             return MOVE_FORWARD
 
         # On map: STOPPED or MOVING.
@@ -404,22 +459,37 @@ class HeuristicDispatcher:
         npos = get_new_position(pos, nxt_dir)
         t_next = int(self.env._elapsed_steps) + 1
 
-        occ = self.env.agent_positions[npos]
-        if occ != -1 and occ != handle:
-            return STOP_MOVING
+        on_switch = pos in self._switches
 
-        holder = self._reservations.get((npos, t_next))
-        if holder is not None and holder != handle and self._has_higher_priority(holder, handle):
-            return STOP_MOVING
-
-        if self._branch_blocked_by_headon(handle, npos, nxt_dir):
+        def try_alt():
+            if not on_switch:
+                return None
             alt = self._alternative_direction(pos, direction, target, nxt_dir)
-            if alt is not None:
-                alt_dir, alt_act = alt
-                alt_pos = get_new_position(pos, alt_dir)
-                alt_occ = self.env.agent_positions[alt_pos]
-                if alt_occ == -1 or alt_occ == handle:
-                    return alt_act
+            if alt is None:
+                return None
+            alt_dir, alt_act = alt
+            alt_pos = get_new_position(pos, alt_dir)
+            if self.env.agent_positions[alt_pos] not in (-1, handle):
+                return None
+            if self._corridor_opposing(handle, alt_pos, alt_dir) is not None:
+                return None
+            return alt_act
+
+        # 1. Don't enter a corridor that already contains an opposing
+        # train - that's an immediate physical deadlock.
+        if self._corridor_opposing(handle, npos, nxt_dir) is not None:
+            alt_act = try_alt()
+            return alt_act if alt_act is not None else STOP_MOVING
+
+        # 2. Don't enter a corridor that a higher-priority projection has
+        # claimed (caught by the reservation pass). Same fallback.
+        if handle in self._blocked_corridor:
+            alt_act = try_alt()
+            return alt_act if alt_act is not None else STOP_MOVING
+
+        # 3. Immediate-cell occupancy: yield (STOP). Geodesic will be
+        # reissued next step when the blocker clears.
+        if self._immediate_blocker(handle, npos, nxt_dir, depth=1) is not None:
             return STOP_MOVING
 
         return geodesic_act
