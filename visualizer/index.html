@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flatland Simulation Inspector</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="visualizer.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo-container">
+                <div class="logo-icon"></div>
+                <h1>Flatland Inspector</h1>
+            </div>
+            <div class="env-info" id="envInfo">
+                <span class="info-badge">Size: <strong id="badgeSize">-</strong></span>
+                <span class="info-badge">Agents: <strong id="badgeAgents">-</strong></span>
+                <span class="info-badge">Cities: <strong id="badgeCities">-</strong></span>
+                <span class="info-badge">Seed: <strong id="badgeSeed">-</strong></span>
+                <span class="info-badge success">Success Rate: <strong id="badgeSuccess">-</strong></span>
+            </div>
+            <div class="file-loader">
+                <label for="fileInput" class="btn btn-secondary">Load trajectory.json</label>
+                <input type="file" id="fileInput" accept=".json" style="display: none;">
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="app-workspace">
+            <!-- Left Panel: Map & Playback -->
+            <section class="viewport-section">
+                <div class="canvas-container" id="canvasContainer">
+                    <canvas id="gridCanvas"></canvas>
+                    <div class="canvas-instructions">
+                        Left-Click + Drag to Pan &bull; Scroll to Zoom &bull; Click agent to select
+                    </div>
+                    <div class="zoom-controls">
+                        <button id="btnZoomIn" title="Zoom In">+</button>
+                        <button id="btnZoomReset" title="Reset View">1:1</button>
+                        <button id="btnZoomOut" title="Zoom Out">-</button>
+                    </div>
+                </div>
+
+                <!-- Playback controls -->
+                <div class="playback-controls">
+                    <div class="playback-row">
+                        <button id="btnPrev" class="btn btn-ctrl" title="Previous Step">
+                            <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6L18 6v12z"/></svg>
+                        </button>
+                        <button id="btnPlay" class="btn btn-ctrl btn-primary" title="Play / Pause">
+                            <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                            <svg id="pauseIcon" viewBox="0 0 24 24" style="display: none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                        </button>
+                        <button id="btnNext" class="btn btn-ctrl" title="Next Step">
+                            <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6z"/></svg>
+                        </button>
+                        <button id="btnReset" class="btn btn-ctrl" title="Reset to Start">
+                            <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+                        </button>
+
+                        <div class="slider-container">
+                            <input type="range" id="stepSlider" min="0" max="0" value="0">
+                            <div class="step-label">Step <span id="lblCurrentStep">0</span> / <span id="lblMaxStep">0</span></div>
+                        </div>
+
+                        <div class="speed-container">
+                            <label for="speedSlider">Speed</label>
+                            <input type="range" id="speedSlider" min="1" max="10" value="5">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Diagnostics & Details -->
+            <aside class="sidebar-section">
+                <!-- Tab Headers -->
+                <div class="tabs-header">
+                    <button class="tab-btn active" id="tabAgentsBtn">Agents</button>
+                    <button class="tab-btn" id="tabReservationsBtn">Reservations</button>
+                    <button class="tab-btn" id="tabHelpBtn">Legend &amp; Help</button>
+                </div>
+
+                <!-- Tab Contents -->
+                <div class="tabs-content">
+                    <!-- Tab: Agents -->
+                    <div class="tab-pane active" id="tabAgents">
+                        <div class="agent-selector-wrapper">
+                            <label for="agentSelect">Select Agent:</label>
+                            <select id="agentSelect" class="form-select">
+                                <option value="">-- Select an Agent --</option>
+                            </select>
+                        </div>
+
+                        <!-- Selected Agent Details -->
+                        <div class="agent-card" id="agentCard" style="display: none;">
+                            <div class="card-header">
+                                <h3 id="agentTitle">Agent #0</h3>
+                                <span class="status-badge" id="agentStateBadge">OFF-MAP</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="metric-row">
+                                    <span class="label">Position:</span>
+                                    <span class="value" id="agentPos">-</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="label">Target:</span>
+                                    <span class="value" id="agentTarget">-</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="label">Priority Rank:</span>
+                                    <span class="value" id="agentPriority">-</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="label">Slack (Priority):</span>
+                                    <span class="value" id="agentSlack">-</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="label">Malfunction Timer:</span>
+                                    <span class="value" id="agentMalfunction">-</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="label">Last Action:</span>
+                                    <span class="value font-mono" id="agentAction">-</span>
+                                </div>
+                                <div class="metric-row">
+                                    <span class="label">Dispatcher Recommendation:</span>
+                                    <span class="value font-mono" id="agentRecAction">-</span>
+                                </div>
+
+                                <div class="action-mask-container">
+                                    <h4>Action Mask</h4>
+                                    <div class="action-mask-grid" id="actionMaskGrid">
+                                        <!-- Will be filled by JS -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Agent List Table -->
+                        <div class="agent-list-wrapper">
+                            <h4>All Agents (Sorted by Priority Rank)</h4>
+                            <div class="table-container">
+                                <table class="data-table" id="agentTable">
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>State</th>
+                                            <th>Slack</th>
+                                            <th>Rank</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="agentTableBody">
+                                        <!-- Filled by JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Reservations -->
+                    <div class="tab-pane" id="tabReservations">
+                        <div class="reservation-options">
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="chkShowAllReservations" checked>
+                                <span class="checkmark"></span>
+                                Overlay all reservations on grid
+                            </label>
+                        </div>
+                        <div class="table-container">
+                            <table class="data-table" id="reservationsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Cell (R, C)</th>
+                                        <th>Time</th>
+                                        <th>Agent</th>
+                                        <th>Dir</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="reservationsTableBody">
+                                    <!-- Filled by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Legend & Help -->
+                    <div class="tab-pane" id="tabHelp">
+                        <div class="legend-content">
+                            <h3>Grid Legend</h3>
+                            <ul class="legend-list">
+                                <li>
+                                    <span class="legend-color track"></span>
+                                    <span>Rail track (Normal)</span>
+                                </li>
+                                <li>
+                                    <span class="legend-color switch"></span>
+                                    <span>Rail switch (Choice available)</span>
+                                </li>
+                                <li>
+                                    <span class="legend-color target"></span>
+                                    <span>Station / Target cell</span>
+                                </li>
+                                <li>
+                                    <span class="legend-color reservation"></span>
+                                    <span>Reserved cell (Future planning)</span>
+                                </li>
+                                <li>
+                                    <span class="legend-color agent-chevron">▲</span>
+                                    <span>Moving Agent (chevron points direction)</span>
+                                </li>
+                                <li>
+                                    <span class="legend-color agent-stopped">■</span>
+                                    <span>Stopped Agent</span>
+                                </li>
+                                <li>
+                                    <span class="legend-color agent-malfunction">⚠</span>
+                                    <span>Malfunctioning Agent (Red border)</span>
+                                </li>
+                            </ul>
+
+                            <h3>Key Analysis Features</h3>
+                            <p><strong>1. Observation Space Visualizer:</strong> Selecting an agent overlays their action mask and dispatcher recommendation directly onto the grid. A blue arrow shows the recommended geodesic path, and valid moves from the mask are highlighted in green.</p>
+                            <p><strong>2. Reservation Table:</strong> Displays the time-space reservations made by the Heuristic Priority Dispatcher. This allows you to track where trains are planning to yield at switches and corridors.</p>
+                            <p><strong>3. Slack &amp; Priority:</strong> Higher priority (lower slack values) trains reserve paths first. You can investigate how slack increases or decreases based on delay and latest arrival timetables.</p>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <script src="visualizer.js"></script>
+</body>
+</html>
