@@ -751,7 +751,7 @@ function draw() {
             ctx.fillRect(-6, -6, 12, 12);
         } else {
             // Draw chevron pointing in direction
-            const rot = a.direction * Math.PI / 2; // Direction: 0=N, 1=E, 2=S, 3=W
+            const rot = (a.direction !== null ? a.direction : 0) * Math.PI / 2; // Direction: 0=N, 1=E, 2=S, 3=W
             ctx.rotate(rot);
             
             ctx.beginPath();
@@ -778,7 +778,7 @@ function draw() {
         if (agentState.position) {
             const cx = agentState.position[1] * CELL_SIZE + CELL_SIZE / 2;
             const cy = agentState.position[0] * CELL_SIZE + CELL_SIZE / 2;
-            const dir = agentState.direction;
+            const dir = agentState.direction !== null ? agentState.direction : 0;
             
             // Draw recommended action arrow (if moving and recommend not DO_NOTHING/STOP)
             const recAct = agentState.recommended_action;
