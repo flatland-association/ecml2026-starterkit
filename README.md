@@ -21,8 +21,42 @@ See [STEP-BY-STEP_GUIDE](STEP-BY-STEP_GUIDE.md) contributed by <a href="https://
 
 ## Customizing Your Submission
 
-* Customize policy `submission.my_policy.MyPolicy`
-* Customize observation builder `submission.my_observation_builder.MyObservationBuilder`
+* Customize policy `submission.my_policy.MyPolicy`:
+
+```python
+from typing import Any, List, Dict
+
+from flatland.envs.RailEnvPolicy import RailEnvPolicy
+from flatland.envs.rail_env_action import RailEnvActions
+from flatland.utils.seeding import np_random
+
+
+class MyPolicy(RailEnvPolicy):
+    # implement this method, called for each agent in sequence
+    def act(self, observation: Any, **kwargs) -> RailEnvActions:
+        return np_random.choice(5)
+
+    # in addition, implement if you need to do some work before `act` is called on individual agents
+    # def act_many(self, handles: List[int], observations: List[Any], **kwargs) -> Dict[int, RailEnvActions]:
+    #     ...
+    #     return super().act_many(handles, observations)
+```
+
+* Customize observation builder `submission.my_observation_builder.MyObservationBuilder`:
+
+```python
+from flatland.core.env import Environment
+from flatland.core.env_observation_builder import ObservationBuilder
+
+
+class MyObservationBuilder(ObservationBuilder[Environment, bool]):
+    def reset(self):
+        pass
+
+    def get(self, handle: int = 0) -> bool:
+        return True
+```
+
 * Add `pip` dependencies to `submission/requirements.txt`.
 * All resources under `submission/` are added to the Docker image (add checkpoints here and load from your policy).
 
