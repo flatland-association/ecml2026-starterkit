@@ -24,7 +24,7 @@ See [STEP-BY-STEP_GUIDE](STEP-BY-STEP_GUIDE.md) contributed by <a href="https://
 * Customize policy `submission.my_policy.MyPolicy`:
 
 ```python
-from typing import Any, List, Dict
+from typing import Any
 
 from flatland.envs.RailEnvPolicy import RailEnvPolicy
 from flatland.envs.rail_env_action import RailEnvActions
@@ -32,9 +32,13 @@ from flatland.utils.seeding import np_random
 
 
 class MyPolicy(RailEnvPolicy):
+    def __init__(self):
+        super().__init__()
+        self.np_random, _ = np_random(seed=42)
+
     # implement this method, called for each agent in sequence
     def act(self, observation: Any, **kwargs) -> RailEnvActions:
-        return np_random.choice(5)
+        return self.np_random.choice(5)
 
     # in addition, implement if you need to do some work before `act` is called on individual agents
     # def act_many(self, handles: List[int], observations: List[Any], **kwargs) -> Dict[int, RailEnvActions]:
